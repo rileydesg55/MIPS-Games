@@ -1,1 +1,4 @@
 Rock Paper Scissors, Blackjack, and Tic Tac Toe made in MIPS Assembly.
+Rock Paper Scissors: Gets the user's input, then uses a random number generator to compare the two inputs and decides a winner. Uses bitmap graphics to also display this.
+Blackjack: Keeps a count of the user's cards as well as the computer opponent's. Accounts for aces as 1 or 11 and gives the user the choices to hit or stand and compares the final total between the two opponents to decide a winner. If the user wins the amount of "money" he bets is doubled and returned to him.
+Tic Tac Toe: Uses a coordinate system from 1 to 9 with each number indicating a cell. The user selects a cell, which loops if the chosen cell is already chosen, and then the computer opponent randomly selects a cell, also repeating until an empty cell is chosen. The game checks vertically, horizontally, and diagonally for a winner and keeps score.
