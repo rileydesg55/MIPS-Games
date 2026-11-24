@@ -1,0 +1,1196 @@
+AI Disclaimer: Used Claude to help make tic tac toe, tweaks with blackjack, and help with all bitmap display stuff.
+
+
+
+Blackjack code:
+
+# Blackjack with Bitmap Display
+#
+# BITMAP SETUP (Tools > Bitmap Display):
+#   Unit Width = 8, Unit Height = 8
+#   Display Width = 256, Display Height = 256
+#   Base address = 0x10008000 ($gp)
+#   Click "Connect to MARS" before running.
+#
+# After each hand the screen shows WIN, LOSE or PUSH (black text on white).
+# $t8 holds the result: 0 = push, 1 = win, 2 = lose.
+ 
+.eqv DISPLAY_BASE 0x10008000
+ 
+.data
+	initialPrompt:   .asciiz "Blackjack\nDealer stands on soft 17\n"
+	numInputInstruct:.asciiz "\nHow much do you want to wager?\n"
+	bank:            .asciiz "\nBank: "
+	youDrew:         .asciiz "You drew a "
+	dealerShows:     .asciiz "Dealer shows a "
+	yourTotal:       .asciiz "Your total: "
+	dealerTotal:     .asciiz "Dealer total: "
+	hitPrompt:       .asciiz "1 = hit, 2 = stand\n"
+	userBust:        .asciiz "Bust! Dealer wins\n"
+	dealerBustMsg:   .asciiz "Dealer busts! You win\n"
+	winMsg:          .asciiz "You win!\n"
+	loseMsg:         .asciiz "Dealer wins\n"
+	pushMsg:         .asciiz "Push\n"
+	gameOverMsg:     .asciiz "\nOut of money. Game over.\n"
+	newline:         .asciiz "\n"
+ 
+	# Word images: 5 rows each, one byte per pixel (1 = black), row by row.
+	# Widths: WIN = 14, LOSE = 15, PUSH = 15
+	winImg:
+	.byte 1,0,0,0,1,0,1,1,1,0,1,0,0,1
+	.byte 1,0,0,0,1,0,0,1,0,0,1,1,0,1
+	.byte 1,0,1,0,1,0,0,1,0,0,1,0,1,1
+	.byte 1,0,1,0,1,0,0,1,0,0,1,0,0,1
+	.byte 0,1,0,1,0,0,1,1,1,0,1,0,0,1
+ 
+	loseImg:
+	.byte 1,0,0,0,1,1,1,0,1,1,1,0,1,1,1
+	.byte 1,0,0,0,1,0,1,0,1,0,0,0,1,0,0
+	.byte 1,0,0,0,1,0,1,0,1,1,1,0,1,1,1
+	.byte 1,0,0,0,1,0,1,0,0,0,1,0,1,0,0
+	.byte 1,1,1,0,1,1,1,0,1,1,1,0,1,1,1
+ 
+	pushImg:
+	.byte 1,1,1,0,1,0,1,0,1,1,1,0,1,0,1
+	.byte 1,0,1,0,1,0,1,0,1,0,0,0,1,0,1
+	.byte 1,1,1,0,1,0,1,0,1,1,1,0,1,1,1
+	.byte 1,0,0,0,1,0,1,0,0,0,1,0,1,0,1
+	.byte 1,0,0,0,1,1,1,0,1,1,1,0,1,0,1
+ 
+.text
+.globl main
+main:
+    # seed RNG with system time
+    li $v0, 30
+    syscall
+    move $a1, $a0
+    li $a0, 0
+    li $v0, 40
+    syscall
+ 
+    li $s3, 300              # bank
+ 
+    li $v0, 4
+    la $a0, initialPrompt
+    syscall
+ 
+start:
+    li $s0, 0                # reset player total / aces / cards
+    li $s1, 0
+    li $s2, 0
+    li $s4, 0                # reset dealer total / aces / cards
+    li $s5, 0
+    li $s6, 0
+ 
+    #win val (0 push, 1 win, 2 lose)
+    li $t8, 0
+ 
+    blez $s3, gameOver
+ 
+    li $v0, 4
+    la $a0, bank
+    syscall
+    li $v0, 1
+    move $a0, $s3
+    syscall
+    li $v0, 4
+    la $a0, newline
+    syscall
+ 
+getInput:
+    li $v0, 4
+    la $a0, numInputInstruct
+    syscall
+    li $v0, 5
+    syscall
+    move $s7, $v0            # wager lives in $s7
+    blt $s7, 1, getInput
+    bgt $s7, $s3, getInput
+    sub $s3, $s3, $s7
+ 
+    jal playerDeal
+    jal dealerDeal
+    la  $a0, dealerShows     # show dealer's first card only
+    move $a1, $t3
+    jal printNum
+    jal playerDeal
+    jal dealerDeal           # hole card, not shown
+ 
+playerTurn:
+    la  $a0, yourTotal
+    move $a1, $s0
+    jal printNum
+    li $v0, 4
+    la $a0, hitPrompt
+    syscall
+    li $v0, 5
+    syscall
+    beq $v0, 2, dealerTurn
+    bne $v0, 1, playerTurn
+ 
+    jal playerDeal
+    bgt $s0, 21, playerBust
+    j playerTurn
+ 
+playerBust:
+    la  $a0, yourTotal
+    move $a1, $s0
+    jal printNum
+    li $v0, 4
+    la $a0, userBust
+    syscall
+    li $t8, 2
+    jal update
+    j start
+ 
+dealerTurn:
+    bge $s4, 17, dealerDone  # stands on all 17+, including soft 17
+    jal dealerDeal
+    j dealerTurn
+ 
+dealerDone:
+    la  $a0, dealerTotal
+    move $a1, $s4
+    jal printNum
+ 
+    bgt $s4, 21, dealerBust
+    bgt $s0, $s4, playerWins
+    blt $s0, $s4, dealerWins
+ 
+    add $s3, $s3, $s7        # push: wager returned
+    li $v0, 4
+    la $a0, pushMsg
+    syscall
+    li $t8, 0
+    jal update
+    j start
+ 
+dealerBust:
+    li $v0, 4
+    la $a0, dealerBustMsg
+    syscall
+    li $t8, 1
+    jal update
+    j payWin
+ 
+playerWins:
+    li $v0, 4
+    la $a0, winMsg
+    syscall
+    li $t8, 1
+    jal update
+payWin:
+    sll $t0, $s7, 1          # wager * 2
+    add $s3, $s3, $t0
+    j start
+ 
+dealerWins:
+    li $v0, 4
+    la $a0, loseMsg
+    syscall
+    li $t8, 2
+    jal update
+    j start
+ 
+gameOver:
+    li $v0, 4
+    la $a0, gameOverMsg
+    syscall
+    li $v0, 10
+    syscall
+ 
+# ---------- returns card value (1-11) in $v0 ----------
+drawCard:
+    li $v0, 42
+    li $a0, 0
+    li $a1, 13
+    syscall
+    addi $v0, $a0, 1
+    li $t0, 1
+    beq $v0, $t0, isAce
+    ble $v0, 10, drawRet
+    li $v0, 10
+    j drawRet
+isAce:
+    li $v0, 11
+drawRet:
+    jr $ra
+ 
+playerDeal:
+    addi $sp, $sp, -4
+    sw   $ra, 0($sp)
+ 
+    jal  drawCard
+    move $t3, $v0
+    add  $s0, $s0, $t3
+    addi $s2, $s2, 1
+    li   $t0, 11
+    bne  $t3, $t0, p_check
+    addi $s1, $s1, 1
+p_check:
+    ble  $s0, 21, p_done
+    beqz $s1, p_done
+    addi $s0, $s0, -10
+    addi $s1, $s1, -1
+p_done:
+    la   $a0, youDrew
+    move $a1, $t3
+    jal  printNum
+ 
+    lw   $ra, 0($sp)
+    addi $sp, $sp, 4
+    jr   $ra
+ 
+dealerDeal:
+    addi $sp, $sp, -4
+    sw   $ra, 0($sp)
+ 
+    jal  drawCard
+    move $t3, $v0
+    add  $s4, $s4, $t3
+    addi $s6, $s6, 1
+    li   $t0, 11
+    bne  $t3, $t0, d_check
+    addi $s5, $s5, 1
+d_check:
+    ble  $s4, 21, d_done
+    beqz $s5, d_done
+    addi $s4, $s4, -10
+    addi $s5, $s5, -1
+d_done:
+    lw   $ra, 0($sp)
+    addi $sp, $sp, 4
+    jr   $ra
+ 
+# prints string in $a0, then number in $a1, then newline
+printNum:
+    move $t4, $a1
+    li $v0, 4
+    syscall
+    li $v0, 1
+    move $a0, $t4
+    syscall
+    li $v0, 4
+    la $a0, newline
+    syscall
+    jr $ra
+ 
+# ============================================================
+# BITMAP DISPLAY ROUTINES
+# Pixel address = DISPLAY_BASE + (y * 32 + x) * 4   (32 units per row)
+# ============================================================
+ 
+# ------------------------------------------------------------
+# update: shows WIN / LOSE / PUSH based on $t8 (1 = win, 2 = lose,
+# anything else = push). White background, word centered, black text.
+# ------------------------------------------------------------
+update:
+    addi $sp, $sp, -4
+    sw   $ra, 0($sp)
+ 
+    li   $a0, 0x00FFFFFF
+    jal  fillScreen
+ 
+    beq  $t8, 1, useWin
+    beq  $t8, 2, useLose
+    la   $a2, pushImg
+    li   $a3, 15                 # width of PUSH
+    j    placeWord
+useWin:
+    la   $a2, winImg
+    li   $a3, 14                 # width of WIN
+    j    placeWord
+useLose:
+    la   $a2, loseImg
+    li   $a3, 15                 # width of LOSE
+placeWord:
+    li   $t0, 32
+    sub  $t0, $t0, $a3
+    srl  $a0, $t0, 1             # x = (32 - width) / 2
+    li   $a1, 13                 # y = (32 - 5) / 2, rounded
+    jal  drawWord
+ 
+    lw   $ra, 0($sp)
+    addi $sp, $sp, 4
+    jr   $ra
+ 
+# ------------------------------------------------------------
+# fillScreen: $a0 = color. Paints all 32 x 32 units.
+# ------------------------------------------------------------
+fillScreen:
+    li   $t0, DISPLAY_BASE
+    li   $t1, 0
+fs_loop:
+    beq  $t1, 1024, fs_done
+    sw   $a0, 0($t0)
+    addi $t0, $t0, 4
+    addi $t1, $t1, 1
+    j    fs_loop
+fs_done:
+    jr   $ra
+ 
+# ------------------------------------------------------------
+# drawWord: draws a 5-row image of black pixels.
+#   $a0 = x, $a1 = y (display units), $a2 = image address,
+#   $a3 = image width. Reads width * 5 bytes in row order.
+# ------------------------------------------------------------
+drawWord:
+    li   $t0, 0                  # row
+dw_row:
+    beq  $t0, 5, dw_done
+    li   $t1, 0                  # column
+dw_col:
+    beq  $t1, $a3, dw_nextRow
+    lbu  $t2, 0($a2)             # next pixel from the table
+    addi $a2, $a2, 1
+    beqz $t2, dw_skip
+    add  $t3, $a1, $t0           # y + row
+    sll  $t3, $t3, 5             # * 32
+    add  $t4, $a0, $t1           # x + column
+    add  $t3, $t3, $t4
+    sll  $t3, $t3, 2             # * 4 bytes
+    li   $t4, DISPLAY_BASE
+    add  $t3, $t3, $t4
+    sw   $zero, 0($t3)           # black pixel
+dw_skip:
+    addi $t1, $t1, 1
+    j    dw_col
+dw_nextRow:
+    addi $t0, $t0, 1
+    j    dw_row
+dw_done:
+    jr   $ra
+ 
+
+
+Tic Tac Toe code:
+
+# BITMAP SETUP (do this before running):
+#   Tools > Bitmap Display, then set
+#     Unit Width = 8, Unit Height = 8
+#     Display Width = 256, Display Height = 256
+#     Base address = 0x10008000 ($gp)
+#   Click "Connect to MARS", then assemble and run.
+# The display is a 32x32 grid of units. The board uses 26x26 of them:
+# three 8x8 cells with 1-unit grid lines between them.
+ 
+.eqv DISPLAY_BASE 0x10008000
+ 
+.data
+board:      .byte 0,0,0,0,0,0,0,0,0
+# the 8 winning lines (3 cell indexes each)
+lines:      .byte 0,1,2, 3,4,5, 6,7,8, 0,3,6, 1,4,7, 2,5,8, 0,4,8, 2,4,6
+inputBuf:   .space 32
+ 
+# 8x8 sprites: one byte per row, bit 7 = leftmost pixel, 1 = lit
+spriteX:    .byte 0xC3,0x66,0x3C,0x18,0x18,0x3C,0x66,0xC3
+spriteO:    .byte 0x3C,0x7E,0xC3,0xC3,0xC3,0xC3,0x7E,0x3C
+ 
+welcome:    .asciiz "Tic-Tac-Toe\nYou are X, computer is O. You go first.\nOpen Tools > Bitmap Display (unit 8x8, display 256x256, base 0x10008000) and click Connect.\n"
+movePrompt: .asciiz "\nYour move (1-9): "
+badMsg:     .asciiz "Please enter a number from 1 to 9.\n"
+takenMsg:   .asciiz "That square is taken.\n"
+compMsg:    .asciiz "\nComputer plays "
+winMsg:     .asciiz "\nYou win!\n"
+loseMsg:    .asciiz "\nComputer wins!\n"
+drawMsg:    .asciiz "\nIt's a draw.\n"
+againMsg:   .asciiz "\nPlay again? 1 = yes, 2 = no: "
+wLabel:     .asciiz "\nWins: "
+lLabel:     .asciiz "  Losses: "
+dLabel:     .asciiz "  Draws: "
+divider:    .asciiz "---+---+---\n"
+newline:    .asciiz "\n"
+ 
+.text
+.globl main
+ 
+# $s0 = wins, $s1 = losses, $s2 = draws (all helper functions that use
+# $s registers save and restore them, so these survive)
+main:
+    # seed the RNG with the system time
+    li  $v0, 30
+    syscall
+    move $a1, $a0
+    li  $a0, 0
+    li  $v0, 40
+    syscall
+ 
+    li  $s0, 0
+    li  $s1, 0
+    li  $s2, 0
+ 
+    li  $v0, 4
+    la  $a0, welcome
+    syscall
+ 
+newGame:
+    # clear the board
+    la  $t0, board
+    li  $t1, 0
+clearLoop:
+    beq $t1, 9, clearDone
+    sb  $zero, 0($t0)
+    addi $t0, $t0, 1
+    addi $t1, $t1, 1
+    j   clearLoop
+clearDone:
+    jal initDisplay
+    jal printBoard
+    jal drawBoard
+ 
+gameLoop:
+    jal playerMove
+    jal printBoard
+    jal drawBoard
+    li  $a0, 1
+    jal checkWin
+    bnez $v0, playerWon
+    jal boardFull
+    bnez $v0, gameDraw
+ 
+    jal computerMove
+    jal printBoard
+    jal drawBoard
+    li  $a0, 2
+    jal checkWin
+    bnez $v0, computerWon
+    # X moves on turns 1,3,5,7,9 so the board can only fill after X's move
+    j   gameLoop
+ 
+playerWon:
+    li  $v0, 4
+    la  $a0, winMsg
+    syscall
+    addi $s0, $s0, 1
+    j   roundOver
+ 
+computerWon:
+    li  $v0, 4
+    la  $a0, loseMsg
+    syscall
+    addi $s1, $s1, 1
+    j   roundOver
+ 
+gameDraw:
+    li  $v0, 4
+    la  $a0, drawMsg
+    syscall
+    addi $s2, $s2, 1
+ 
+roundOver:
+    jal printScore
+askAgain:
+    li  $v0, 4
+    la  $a0, againMsg
+    syscall
+    jal readInt
+    beqz $v1, askAgain
+    beq $v0, 1, newGame
+    beq $v0, 2, quit
+    j   askAgain
+ 
+quit:
+    li  $v0, 10
+    syscall
+ 
+# ------------------------------------------------------------
+# printBoard: draws the board; empty squares show their number
+# ------------------------------------------------------------
+printBoard:
+    li  $v0, 4
+    la  $a0, newline
+    syscall
+    li  $t0, 0                  # cell index
+pb_loop:
+    beq $t0, 9, pb_end
+    li  $v0, 11                 # leading space
+    li  $a0, 32
+    syscall
+ 
+    la  $t1, board
+    add $t1, $t1, $t0
+    lb  $t2, 0($t1)
+    beq $t2, 1, pb_x
+    beq $t2, 2, pb_o
+    addi $a0, $t0, 49           # '1' + index
+    j   pb_print
+pb_x:
+    li  $a0, 88                 # 'X'
+    j   pb_print
+pb_o:
+    li  $a0, 79                 # 'O'
+pb_print:
+    li  $v0, 11
+    syscall
+ 
+    rem $t3, $t0, 3
+    beq $t3, 2, pb_endRow
+    li  $v0, 11                 # column separator " |"
+    li  $a0, 32
+    syscall
+    li  $a0, 124
+    syscall
+    j   pb_next
+pb_endRow:
+    li  $v0, 4
+    la  $a0, newline
+    syscall
+    beq $t0, 8, pb_next         # no divider after the last row
+    la  $a0, divider
+    syscall
+pb_next:
+    addi $t0, $t0, 1
+    j   pb_loop
+pb_end:
+    jr  $ra
+ 
+# ------------------------------------------------------------
+# checkWin: $a0 = player (1 or 2). Returns $v0 = 1 if they have 3 in a row
+# ------------------------------------------------------------
+checkWin:
+    la  $t0, lines
+    la  $t5, board
+    li  $t1, 0
+cw_loop:
+    beq $t1, 8, cw_no
+    lb  $t2, 0($t0)
+    add $t3, $t5, $t2
+    lb  $t3, 0($t3)
+    bne $t3, $a0, cw_next
+    lb  $t2, 1($t0)
+    add $t3, $t5, $t2
+    lb  $t3, 0($t3)
+    bne $t3, $a0, cw_next
+    lb  $t2, 2($t0)
+    add $t3, $t5, $t2
+    lb  $t3, 0($t3)
+    bne $t3, $a0, cw_next
+    li  $v0, 1
+    jr  $ra
+cw_next:
+    addi $t0, $t0, 3
+    addi $t1, $t1, 1
+    j   cw_loop
+cw_no:
+    li  $v0, 0
+    jr  $ra
+ 
+# ------------------------------------------------------------
+# boardFull: returns $v0 = 1 if no empty squares remain
+# ------------------------------------------------------------
+boardFull:
+    la  $t0, board
+    li  $t1, 0
+bf_loop:
+    beq $t1, 9, bf_yes
+    lb  $t2, 0($t0)
+    beqz $t2, bf_no
+    addi $t0, $t0, 1
+    addi $t1, $t1, 1
+    j   bf_loop
+bf_yes:
+    li  $v0, 1
+    jr  $ra
+bf_no:
+    li  $v0, 0
+    jr  $ra
+ 
+# ------------------------------------------------------------
+# findWin: $a0 = player. Returns $v0 = index of a square that would
+# give that player three in a row, or -1 if none.
+# ------------------------------------------------------------
+findWin:
+    addi $sp, $sp, -16
+    sw  $ra, 0($sp)
+    sw  $s0, 4($sp)
+    sw  $s1, 8($sp)
+    sw  $s2, 12($sp)
+ 
+    move $s0, $a0               # player
+    li  $s1, 0                  # index
+fw_loop:
+    beq $s1, 9, fw_none
+    la  $t0, board
+    add $s2, $t0, $s1           # address of cell
+    lb  $t1, 0($s2)
+    bnez $t1, fw_next           # occupied
+    sb  $s0, 0($s2)             # try it
+    move $a0, $s0
+    jal checkWin
+    sb  $zero, 0($s2)           # undo
+    bnez $v0, fw_found
+fw_next:
+    addi $s1, $s1, 1
+    j   fw_loop
+fw_found:
+    move $v0, $s1
+    j   fw_ret
+fw_none:
+    li  $v0, -1
+fw_ret:
+    lw  $ra, 0($sp)
+    lw  $s0, 4($sp)
+    lw  $s1, 8($sp)
+    lw  $s2, 12($sp)
+    addi $sp, $sp, 16
+    jr  $ra
+ 
+# ------------------------------------------------------------
+# playerMove: asks until the player picks a valid empty square
+# ------------------------------------------------------------
+playerMove:
+    addi $sp, $sp, -4
+    sw  $ra, 0($sp)
+pm_ask:
+    li  $v0, 4
+    la  $a0, movePrompt
+    syscall
+    jal readInt
+    beqz $v1, pm_bad
+    blt $v0, 1, pm_bad
+    bgt $v0, 9, pm_bad
+    addi $t0, $v0, -1
+    la  $t1, board
+    add $t1, $t1, $t0
+    lb  $t2, 0($t1)
+    bnez $t2, pm_taken
+    li  $t3, 1
+    sb  $t3, 0($t1)
+    lw  $ra, 0($sp)
+    addi $sp, $sp, 4
+    jr  $ra
+pm_bad:
+    li  $v0, 4
+    la  $a0, badMsg
+    syscall
+    j   pm_ask
+pm_taken:
+    li  $v0, 4
+    la  $a0, takenMsg
+    syscall
+    j   pm_ask
+ 
+# ------------------------------------------------------------
+# computerMove: picks a random empty square
+# ------------------------------------------------------------
+computerMove:
+    addi $sp, $sp, -4
+    sw  $ra, 0($sp)
+ 
+cm_random:
+    li  $v0, 42
+    li  $a0, 0
+    li  $a1, 9
+    syscall                     # random 0-8 in $a0
+    move $v0, $a0
+    la  $t0, board
+    add $t1, $t0, $v0
+    lb  $t2, 0($t1)
+    bnez $t2, cm_random         # occupied, try again
+ 
+cm_place:
+    la  $t0, board
+    add $t0, $t0, $v0
+    li  $t1, 2
+    sb  $t1, 0($t0)
+    addi $t5, $v0, 1            # 1-based position for display
+ 
+    li  $v0, 4
+    la  $a0, compMsg
+    syscall
+    li  $v0, 1
+    move $a0, $t5
+    syscall
+    li  $v0, 4
+    la  $a0, newline
+    syscall
+ 
+    lw  $ra, 0($sp)
+    addi $sp, $sp, 4
+    jr  $ra
+ 
+# ------------------------------------------------------------
+# printScore
+# ------------------------------------------------------------
+printScore:
+    li  $v0, 4
+    la  $a0, wLabel
+    syscall
+    li  $v0, 1
+    move $a0, $s0
+    syscall
+    li  $v0, 4
+    la  $a0, lLabel
+    syscall
+    li  $v0, 1
+    move $a0, $s1
+    syscall
+    li  $v0, 4
+    la  $a0, dLabel
+    syscall
+    li  $v0, 1
+    move $a0, $s2
+    syscall
+    li  $v0, 4
+    la  $a0, newline
+    syscall
+    jr  $ra
+ 
+# ------------------------------------------------------------
+# readInt: reads a line, validates it. Returns $v0 = value,
+# $v1 = 1 if valid, 0 if not. Never crashes on letters.
+# ------------------------------------------------------------
+readInt:
+    li  $v0, 8
+    la  $a0, inputBuf
+    li  $a1, 10                 # max 9 digits, avoids overflow
+    syscall
+ 
+    la  $t0, inputBuf
+    li  $t1, 0                  # value
+    li  $t2, 0                  # digit count
+ri_loop:
+    lb  $t3, 0($t0)
+    beq $t3, 10, ri_end
+    beqz $t3, ri_end
+    blt $t3, 48, ri_bad
+    bgt $t3, 57, ri_bad
+    addi $t3, $t3, -48
+    mul $t1, $t1, 10
+    add $t1, $t1, $t3
+    addi $t2, $t2, 1
+    addi $t0, $t0, 1
+    j   ri_loop
+ri_end:
+    beqz $t2, ri_bad
+    move $v0, $t1
+    li  $v1, 1
+    jr  $ra
+ri_bad:
+    li  $v0, 0
+    li  $v1, 0
+    jr  $ra
+ 
+# ============================================================
+# BITMAP DISPLAY ROUTINES
+# Pixel address = DISPLAY_BASE + (y * 32 + x) * 4   (32 units per row)
+# ============================================================
+ 
+# ------------------------------------------------------------
+# initDisplay: clears the screen to black and draws the grid lines
+# ------------------------------------------------------------
+initDisplay:
+    li  $t0, DISPLAY_BASE
+    li  $t1, 0
+id_clear:
+    beq $t1, 1024, id_grid      # 32 * 32 units
+    sw  $zero, 0($t0)
+    addi $t0, $t0, 4
+    addi $t1, $t1, 1
+    j   id_clear
+ 
+id_grid:
+    li  $t4, DISPLAY_BASE
+    li  $t9, 0x00FFFFFF         # white grid lines
+    li  $t0, 0                  # i = 0..25
+id_loop:
+    beq $t0, 26, id_done
+    sll $t1, $t0, 5             # i * 32
+ 
+    addi $t2, $t1, 8            # vertical line x = 8, y = i
+    sll $t2, $t2, 2
+    add $t2, $t2, $t4
+    sw  $t9, 0($t2)
+ 
+    addi $t2, $t1, 17           # vertical line x = 17, y = i
+    sll $t2, $t2, 2
+    add $t2, $t2, $t4
+    sw  $t9, 0($t2)
+ 
+    addi $t2, $t0, 256          # horizontal line y = 8 (8*32), x = i
+    sll $t2, $t2, 2
+    add $t2, $t2, $t4
+    sw  $t9, 0($t2)
+ 
+    addi $t2, $t0, 544          # horizontal line y = 17 (17*32), x = i
+    sll $t2, $t2, 2
+    add $t2, $t2, $t4
+    sw  $t9, 0($t2)
+ 
+    addi $t0, $t0, 1
+    j   id_loop
+id_done:
+    jr  $ra
+ 
+# ------------------------------------------------------------
+# drawSprite: draws an 8x8 sprite (reusable in any game)
+#   $a0 = x, $a1 = y (in display units), $a2 = sprite address,
+#   $a3 = color (0x00RRGGBB). Unlit pixels are drawn black.
+# ------------------------------------------------------------
+drawSprite:
+    li  $t0, 0                  # row
+ds_row:
+    beq $t0, 8, ds_done
+    add $t1, $a2, $t0
+    lbu $t2, 0($t1)             # this row's 8 bits
+    add $t3, $a1, $t0           # y + row
+    sll $t3, $t3, 5             # * 32
+    add $t3, $t3, $a0           # + x
+    sll $t3, $t3, 2             # * 4 bytes
+    li  $t4, DISPLAY_BASE
+    add $t3, $t3, $t4           # address of leftmost pixel in this row
+    li  $t5, 0                  # column
+ds_col:
+    beq $t5, 8, ds_next
+    li  $t6, 7
+    sub $t6, $t6, $t5           # shift = 7 - column
+    srlv $t7, $t2, $t6
+    andi $t7, $t7, 1
+    beqz $t7, ds_off
+    sw  $a3, 0($t3)
+    j   ds_adv
+ds_off:
+    sw  $zero, 0($t3)
+ds_adv:
+    addi $t3, $t3, 4
+    addi $t5, $t5, 1
+    j   ds_col
+ds_next:
+    addi $t0, $t0, 1
+    j   ds_row
+ds_done:
+    jr  $ra
+ 
+# ------------------------------------------------------------
+# drawCell: $a0 = cell index 0-8, $a1 = player (1 = X, 2 = O)
+# Cell (row, col) has its top-left corner at x = col*9, y = row*9
+# ------------------------------------------------------------
+drawCell:
+    addi $sp, $sp, -4
+    sw  $ra, 0($sp)
+ 
+    li  $t0, 3
+    div $a0, $t0
+    mflo $t1                    # row
+    mfhi $t2                    # col
+    mul $t3, $t2, 9             # x
+    mul $t4, $t1, 9             # y
+    move $t5, $a1
+    move $a0, $t3
+    move $a1, $t4
+    beq $t5, 1, dc_x
+    la  $a2, spriteO
+    li  $a3, 0x004080FF         # blue O
+    j   dc_draw
+dc_x:
+    la  $a2, spriteX
+    li  $a3, 0x00FF4040         # red X
+dc_draw:
+    jal drawSprite
+ 
+    lw  $ra, 0($sp)
+    addi $sp, $sp, 4
+    jr  $ra
+ 
+# ------------------------------------------------------------
+# drawBoard: draws an X or O sprite for every occupied cell
+# ------------------------------------------------------------
+drawBoard:
+    addi $sp, $sp, -12
+    sw  $ra, 0($sp)
+    sw  $s0, 4($sp)
+    sw  $s1, 8($sp)
+ 
+    li  $s0, 0
+db_loop:
+    beq $s0, 9, db_done
+    la  $t0, board
+    add $t0, $t0, $s0
+    lb  $s1, 0($t0)
+    beqz $s1, db_next
+    move $a0, $s0
+    move $a1, $s1
+    jal drawCell
+db_next:
+    addi $s0, $s0, 1
+    j   db_loop
+db_done:
+    lw  $ra, 0($sp)
+    lw  $s0, 4($sp)
+    lw  $s1, 8($sp)
+    addi $sp, $sp, 12
+    jr  $ra
+
+
+Rock Paper Scissors code:
+
+# Rock Paper Scissors with Bitmap Display
+#
+# BITMAP SETUP (Tools > Bitmap Display):
+#   Unit Width = 8, Unit Height = 8
+#   Display Width = 256, Display Height = 256
+#   Base address = 0x10008000 ($gp)
+#   Click "Connect to MARS" before running.
+#
+# Left sprite = your choice, right sprite = enemy's choice.
+# Background: green = win, red = loss, yellow = tie.
+ 
+.eqv DISPLAY_BASE 0x10008000
+ 
+.data
+	initialPrompt: .asciiz "Rock -> Paper -> Scissors ->\nPick One: 1 rock, 2 paper, 3 scissors )\n"
+	rock: .asciiz "rock"
+	paper: .asciiz "paper"
+	scissors: .asciiz "scissors"
+	cpuPick: .asciiz "Enemy picks: "
+	newLine: .asciiz "\n"
+	tieMess: .asciiz "You tied, try again\n"
+	loseMess: .asciiz "You lost, try again\n"
+	winMess: .asciiz "You win! Play again\n"
+	recordW: .asciiz "\nWin: "
+	recordL: .asciiz " Loss: "
+ 
+	# 8x8 sprites, one byte per row, bit 7 = leftmost pixel, 1 = lit.
+	# Stored back to back so sprite address = sprites + (choice - 1) * 8
+	sprites:
+	.byte 0x3C,0x7E,0xFF,0xFB,0xFF,0xDF,0x7E,0x3C   # rock
+	.byte 0xFE,0x82,0xBA,0x82,0xBA,0x82,0xBA,0xFE   # paper
+	.byte 0x81,0x42,0x24,0x18,0x24,0x66,0x99,0x66   # scissors
+.text
+ 
+main:
+ 
+# seed the RNG with the system time
+li $v0, 30
+syscall
+move $a1, $a0
+li $a0, 0
+li $v0, 40
+syscall
+ 
+#win record
+li $s3, 0
+#loss record
+li $s4, 0
+ 
+startGame:
+li $v0, 4
+la $a0, initialPrompt
+syscall
+# user hand
+li $s0, 0
+#computer hand
+li $s1, 0
+ 
+#get user's choice
+li $v0, 5
+syscall
+move $s0, $v0
+ 
+# reject anything that isn't 1-3 (otherwise it would be treated as rock)
+blt $s0, 1, startGame
+bgt $s0, 3, startGame
+ 
+#get cpu choice
+li $v0, 42
+li $a0, 0
+li $a1, 3
+syscall
+move $s1, $a0
+addi $s1, $s1, 1
+ 
+li $v0, 4
+la $a0, cpuPick
+syscall
+jal printChoice
+ 
+# li $v0, 1
+# move $a0, $s0
+# syscall
+ 
+determineWinner:
+ 
+beq $s0, 1, checkRock
+beq $s0, 2, checkPaper
+beq $s0, 3, checkScissors
+ 
+checkRock:
+beq $s1, 1, tie
+beq $s1, 2, lose
+beq $s1, 3, win
+ 
+checkPaper:
+beq $s1, 1, win
+beq $s1, 2, tie
+beq $s1, 3, lose
+ 
+checkScissors:
+beq $s1, 1, lose
+beq $s1, 2, win
+beq $s1, 3, tie
+ 
+tie:
+li $a0, 0x00F0D020        # yellow
+jal drawScene
+li $v0, 4
+la $a0, tieMess
+syscall
+jal printRecord
+j startGame
+ 
+lose:
+addi $s4, $s4, 1
+li $a0, 0x00D03030        # red
+jal drawScene
+li $v0, 4
+la $a0, loseMess
+syscall
+jal printRecord
+j startGame
+ 
+win:
+addi $s3, $s3, 1
+li $a0, 0x0000B050        # green
+jal drawScene
+li $v0, 4
+la $a0, winMess
+syscall
+jal printRecord
+j startGame
+ 
+ 
+printChoice:
+beq $s1, 1, printRock
+beq $s1, 2, printPaper
+beq $s1, 3, printScissors
+printRock:
+li $v0, 4
+la $a0, rock
+syscall
+la $a0, newLine
+syscall
+jr $ra
+printPaper:
+li $v0, 4
+la $a0, paper
+syscall
+la $a0, newLine
+syscall
+jr $ra
+printScissors:
+li $v0, 4
+la $a0, scissors
+syscall
+la $a0, newLine
+syscall
+jr $ra
+ 
+printRecord:
+li $v0, 4
+la $a0, recordW
+syscall
+li $v0, 1
+move $a0, $s3
+syscall
+li $v0, 4
+la $a0, recordL
+syscall
+li $v0, 1
+move $a0, $s4
+syscall
+li $v0, 4
+la $a0, newLine
+syscall
+jr $ra
+ 
+# ============================================================
+# BITMAP DISPLAY ROUTINES
+# Pixel address = DISPLAY_BASE + (y * 32 + x) * 4   (32 units per row)
+# ============================================================
+ 
+# ------------------------------------------------------------
+# drawScene: $a0 = background color.
+# Fills the screen, then draws your sprite (left, from $s0)
+# and the enemy's sprite (right, from $s1) in black.
+# ------------------------------------------------------------
+drawScene:
+addi $sp, $sp, -4
+sw $ra, 0($sp)
+ 
+jal fillScreen               # $a0 still holds the color
+ 
+# your choice: left side
+li $a0, 4
+li $a1, 12
+addi $t0, $s0, -1
+sll $t0, $t0, 3              # (choice - 1) * 8
+la $a2, sprites
+add $a2, $a2, $t0
+li $a3, 0x00000000
+jal drawSprite
+ 
+# enemy choice: right side
+li $a0, 20
+li $a1, 12
+addi $t0, $s1, -1
+sll $t0, $t0, 3
+la $a2, sprites
+add $a2, $a2, $t0
+li $a3, 0x00000000
+jal drawSprite
+ 
+lw $ra, 0($sp)
+addi $sp, $sp, 4
+jr $ra
+ 
+# ------------------------------------------------------------
+# fillScreen: $a0 = color. Paints all 32 x 32 units.
+# ------------------------------------------------------------
+fillScreen:
+li $t0, DISPLAY_BASE
+li $t1, 0
+fs_loop:
+beq $t1, 1024, fs_done
+sw $a0, 0($t0)
+addi $t0, $t0, 4
+addi $t1, $t1, 1
+j fs_loop
+fs_done:
+jr $ra
+ 
+# ------------------------------------------------------------
+# drawSprite: draws an 8x8 sprite (only lit pixels, so the
+# background shows through the rest).
+#   $a0 = x, $a1 = y (display units), $a2 = sprite address,
+#   $a3 = color
+# ------------------------------------------------------------
+drawSprite:
+li $t0, 0                    # row
+ds_row:
+beq $t0, 8, ds_done
+add $t1, $a2, $t0
+lbu $t2, 0($t1)              # this row's 8 bits
+add $t3, $a1, $t0            # y + row
+sll $t3, $t3, 5              # * 32
+add $t3, $t3, $a0            # + x
+sll $t3, $t3, 2              # * 4 bytes
+li $t4, DISPLAY_BASE
+add $t3, $t3, $t4            # address of leftmost pixel in this row
+li $t5, 0                    # column
+ds_col:
+beq $t5, 8, ds_next
+li $t6, 7
+sub $t6, $t6, $t5            # shift = 7 - column
+srlv $t7, $t2, $t6
+andi $t7, $t7, 1
+beqz $t7, ds_skip
+sw $a3, 0($t3)
+ds_skip:
+addi $t3, $t3, 4
+addi $t5, $t5, 1
+j ds_col
+ds_next:
+addi $t0, $t0, 1
+j ds_row
+ds_done:
+jr $ra
